@@ -63,8 +63,8 @@ The system is built on an **n8n** workflow with the following components:
 **Repository Name:** `gub-jiggasha-bot`
 
 ### Prerequisites
-*   [n8n](https://n8n.io/) (Self-hosted)
-*   [Supabase](https://supabase.com/) Project
+*   [n8n (Self-hosted)](https://n8n.io/) 
+*   [Supabase Project](https://supabase.com/) 
 *   [Google Gemini API Key](https://aistudio.google.com/)
 *   [Telegram Bot Token](https://t.me/BotFather)
 
