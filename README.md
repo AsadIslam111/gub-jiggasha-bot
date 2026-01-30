@@ -32,6 +32,8 @@ University notices and important public information are currently scattered acro
 
 ## 🛠️ Architecture
 
+![Workflow Diagram](workflow_diagram.png)
+
 The system is built on an **n8n** workflow with the following components:
 
 ### 1. Notice Ingestion Flow 📥
