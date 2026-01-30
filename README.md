@@ -5,7 +5,13 @@
 ![Status](https://img.shields.io/badge/Status-Active-success)
 ![Top Language](https://img.shields.io/badge/Platform-n8n-orange)
 ![AI](https://img.shields.io/badge/AI-Google_Gemini_1.5-blue)
-[![Telegram](https://img.shields.io/badge/Telegram-Start_Bot-blue?logo=telegram)](https://t.me/GubJiggasha_bot)
+
+<div align="center">
+  <a href="https://t.me/GubJiggasha_bot">
+    <img src="https://img.shields.io/badge/🤖_Start_GUB_Jiggasha_Bot-Click_Here-2ea44f?style=for-the-badge&logo=telegram" alt="Start Bot" height="50" />
+  </a>
+</div>
+
 
 > [!NOTE]
 > **Data Status:** Currently, the bot contains limited information. Full data and notices for the **Spring 26** semester will be available very soon!
