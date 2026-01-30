@@ -1,0 +1,753 @@
+{
+    "name": "GUB Jiggasha - Combined Bot",
+    "nodes": [
+        {
+            "parameters": {
+                "updates": [
+                    "message"
+                ],
+                "additionalFields": {}
+            },
+            "id": "telegram-trigger",
+            "name": "Telegram Trigger",
+            "type": "n8n-nodes-base.telegramTrigger",
+            "typeVersion": 1.1,
+            "position": [
+                0,
+                0
+            ],
+            "credentials": {
+                "telegramApi": {
+                    "id": "Iy9Ev7CAjPjLQ0gB",
+                    "name": "Telegram account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict"
+                    },
+                    "conditions": [
+                        {
+                            "id": "has-media",
+                            "leftValue": "={{ $json.message.photo || $json.message.document }}",
+                            "rightValue": "",
+                            "operator": {
+                                "type": "exists",
+                                "operation": "exists"
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "id": "has-media",
+            "name": "Has Media?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2,
+            "position": [
+                220,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "resource": "file",
+                "fileId": "={{ ($json.message.photo ? $json.message.photo.slice(-1)[0].file_id : $json.message.document.file_id) }}",
+                "additionalFields": {}
+            },
+            "id": "get-media",
+            "name": "Get Media File",
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1.2,
+            "position": [
+                440,
+                -100
+            ],
+            "credentials": {
+                "telegramApi": {
+                    "id": "Iy9Ev7CAjPjLQ0gB",
+                    "name": "Telegram account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "operation": "extractText",
+                "inputImageFieldName": "data",
+                "detectOnEntireImage": true
+            },
+            "id": "tesseract-ocr",
+            "name": "Tesseract OCR",
+            "type": "n8n-nodes-tesseractjs.tesseract",
+            "typeVersion": 1,
+            "position": [
+                660,
+                -100
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const ocrResult = $input.first().json;\nconst triggerData = $('Telegram Trigger').first().json;\n\nlet rawContent = ocrResult.text || ocrResult.data || ocrResult.result || ocrResult.extractedText || '';\n\nif (!rawContent || rawContent.length < 10) {\n  const keys = Object.keys(ocrResult);\n  for (const key of keys) {\n    if (typeof ocrResult[key] === 'string' && ocrResult[key].length > 10) {\n      rawContent = ocrResult[key];\n      break;\n    }\n  }\n}\n\nif (!rawContent || rawContent.length < 10) {\n  rawContent = 'OCR Debug - Fields: ' + Object.keys(ocrResult).join(', ');\n}\n\nreturn {\n  rawContent: rawContent,\n  sourceType: triggerData.message?.document ? 'pdf' : 'image',\n  telegramMessageId: triggerData.message?.message_id,\n  telegramChatId: triggerData.message?.chat?.id,\n  telegramFileId: triggerData.message?.photo ? triggerData.message.photo.slice(-1)[0].file_id : triggerData.message?.document?.file_id\n};"
+            },
+            "id": "prepare-ocr",
+            "name": "Prepare OCR Content",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                880,
+                -100
+            ]
+        },
+        {
+            "parameters": {
+                "amount": 2
+            },
+            "id": "wait-notice",
+            "name": "Wait 2s",
+            "type": "n8n-nodes-base.wait",
+            "typeVersion": 1.1,
+            "position": [
+                1100,
+                -100
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpQueryAuth",
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={\n  \"contents\": [\n    {\"role\": \"user\", \"parts\": [{\"text\": {{ JSON.stringify(\"You are a JSON extraction assistant. Extract structured JSON from university notices. Return valid JSON only.\\n\\nNotice text:\\n\" + $json.rawContent + \"\\n\\nReturn JSON with: title (required), summary, department, audience (array), notice_type, notice_date, deadline, keywords (array), is_urgent\") }}}]}\n  ],\n  \"generationConfig\": {\"responseMimeType\": \"application/json\"}\n}",
+                "options": {}
+            },
+            "id": "gemini-extract",
+            "name": "Gemini Extract Notice",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1320,
+                -100
+            ],
+            "credentials": {
+                "httpQueryAuth": {
+                    "id": "GEMINI_API_KEY",
+                    "name": "Gemini API Key"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "const geminiResponse = $input.first().json;\nlet extracted = {};\ntry {\n  const content = geminiResponse.candidates[0].content.parts[0].text;\n  extracted = JSON.parse(content);\n} catch (e) {}\n\nlet rawContent = '';\nlet telegramMessageId = null;\nlet telegramChatId = null;\nlet telegramFileId = null;\nlet sourceType = 'unknown';\n\ntry {\n  const ocrData = $('Prepare OCR Content').first().json;\n  rawContent = ocrData.rawContent;\n  telegramMessageId = ocrData.telegramMessageId;\n  telegramChatId = ocrData.telegramChatId;\n  telegramFileId = ocrData.telegramFileId;\n  sourceType = ocrData.sourceType;\n} catch (e) {}\n\nlet title = extracted.title;\nif (!title || title.trim() === '') {\n  title = rawContent ? rawContent.substring(0, 80) + '...' : 'Notice ' + new Date().toISOString().split('T')[0];\n}\n\nreturn {\n  title: title,\n  summary: extracted.summary || null,\n  full_text: rawContent || '',\n  department: extracted.department || null,\n  audience: Array.isArray(extracted.audience) ? extracted.audience : [],\n  notice_type: extracted.notice_type || 'general',\n  notice_date: extracted.notice_date || null,\n  deadline: extracted.deadline || null,\n  keywords: Array.isArray(extracted.keywords) ? extracted.keywords : [],\n  telegram_message_id: telegramMessageId,\n  telegram_chat_id: telegramChatId,\n  telegram_file_id: telegramFileId,\n  source_type: sourceType,\n  processing_status: 'processed',\n  raw_content: rawContent || ''\n};"
+            },
+            "id": "failsafe-notice",
+            "name": "Failsafe Notice",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                1540,
+                -100
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "insert",
+                "tableId": "notices",
+                "dataToSend": "autoMapInputData",
+                "options": {}
+            },
+            "id": "insert-notice",
+            "name": "Insert to Supabase",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                1760,
+                -100
+            ],
+            "credentials": {
+                "supabaseApi": {
+                    "id": "YfFo5wgFVS893IgI",
+                    "name": "Supabase account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+                "text": "✅ Notice saved!\n\n📌 {{ $json.title }}\n📅 Deadline: {{ $json.deadline || 'N/A' }}",
+                "additionalFields": {}
+            },
+            "id": "confirm-notice",
+            "name": "Send Notice Confirmation",
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1.2,
+            "position": [
+                1980,
+                -100
+            ],
+            "credentials": {
+                "telegramApi": {
+                    "id": "Iy9Ev7CAjPjLQ0gB",
+                    "name": "Telegram account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict"
+                    },
+                    "conditions": [
+                        {
+                            "id": "is-private",
+                            "leftValue": "={{ $json.message.chat.type }}",
+                            "rightValue": "private",
+                            "operator": {
+                                "type": "string",
+                                "operation": "equals"
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "id": "is-private",
+            "name": "Is Private Chat?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2,
+            "position": [
+                440,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpQueryAuth",
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={\n  \"contents\": [\n    {\"role\": \"user\", \"parts\": [{\"text\": {{ JSON.stringify(\"You are a query understanding assistant for Green University of Bangladesh. Return ONLY valid JSON.\\n\\nStudent message: \" + $('Telegram Trigger').first().json.message.text + \"\\n\\nAnalyze and return JSON with: intent (fee_payment|exam|registration|result|event|holiday|admission|general|greeting), keywords (array with English AND Bengali), department_filter (string or null), needs_deadline (boolean), time_context (upcoming|past|any)\") }}}]}\n  ],\n  \"generationConfig\": {\"responseMimeType\": \"application/json\"}\n}",
+                "options": {}
+            },
+            "id": "gemini-understand",
+            "name": "Gemini Understand Query",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                660,
+                100
+            ],
+            "credentials": {
+                "httpQueryAuth": {
+                    "id": "GEMINI_API_KEY",
+                    "name": "Gemini API Key"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "const geminiResponse = $input.first().json;\nconst originalQuery = $('Telegram Trigger').first().json.message.text;\n\nlet parsed;\ntry {\n  const content = geminiResponse.candidates[0].content.parts[0].text;\n  parsed = JSON.parse(content);\n} catch (e) {\n  return {\n    intent: 'general',\n    keywords: originalQuery.toLowerCase().split(/\\s+/),\n    department_filter: null,\n    needs_deadline: false,\n    time_context: 'any',\n    original_query: originalQuery,\n    parse_error: e.message\n  };\n}\n\nreturn {\n  ...parsed,\n  original_query: originalQuery\n};"
+            },
+            "id": "parse-query",
+            "name": "Parse Query",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                880,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict"
+                    },
+                    "conditions": [
+                        {
+                            "id": "is-greeting",
+                            "leftValue": "={{ $json.intent }}",
+                            "rightValue": "greeting",
+                            "operator": {
+                                "type": "string",
+                                "operation": "equals"
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "id": "is-greeting",
+            "name": "Is Greeting?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2,
+            "position": [
+                1100,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+                "text": "হ্যালো! 👋 আমি GUB জিজ্ঞাসা Bot।\nতোমার কোন বিষয়ে জানতে চাও?\n\n📌 যেমন:\n• \"Fee er last date kobe?\"\n• \"Exam routine ki?\"\n• \"Registration kobe shuru?\"",
+                "additionalFields": {}
+            },
+            "id": "send-greeting",
+            "name": "Send Greeting",
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1.2,
+            "position": [
+                1320,
+                0
+            ],
+            "credentials": {
+                "telegramApi": {
+                    "id": "Iy9Ev7CAjPjLQ0gB",
+                    "name": "Telegram account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "operation": "getAll",
+                "tableId": "notices",
+                "limit": 20
+            },
+            "id": "search-notices",
+            "name": "Search Notices",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                1320,
+                200
+            ],
+            "credentials": {
+                "supabaseApi": {
+                    "id": "YfFo5wgFVS893IgI",
+                    "name": "Supabase account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "const notices = $input.all();\nconst queryData = $('Parse Query').first().json;\n\nlet result;\nif (!notices || notices.length === 0) {\n  result = {\n    hasResults: false,\n    noticesSummary: 'No matching notices found',\n    originalQuery: queryData.original_query,\n    intent: queryData.intent\n  };\n} else {\n  const noticesSummary = notices.map((item, i) => {\n    const n = item.json;\n    return 'Notice ' + (i + 1) + ': ' + (n.title || 'Untitled') + ' | Deadline: ' + (n.deadline || 'N/A');\n  }).join('; ');\n\n  result = {\n    hasResults: true,\n    noticesSummary,\n    noticesCount: notices.length,\n    originalQuery: queryData.original_query,\n    intent: queryData.intent,\n    firstNotice: notices[0].json\n  };\n}\n\nreturn [{json: result, pairedItem: {item: 0}}];"
+            },
+            "id": "format-results",
+            "name": "Format Results",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                1540,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict"
+                    },
+                    "conditions": [
+                        {
+                            "id": "has-results",
+                            "leftValue": "={{ $json.hasResults }}",
+                            "rightValue": true,
+                            "operator": {
+                                "type": "boolean",
+                                "operation": "equals"
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "id": "has-results",
+            "name": "Has Results?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2,
+            "position": [
+                1760,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpQueryAuth",
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={\n  \"contents\": [\n    {\"role\": \"user\", \"parts\": [{\"text\": {{ JSON.stringify(\"You are GUB জিজ্ঞাসা Bot, a friendly assistant for Green University students. Answer in Banglish (mix of Bengali + English). Be friendly. Include exact dates/deadlines. Keep response under 400 characters. Use emojis sparingly: 📅 ⚠️ ✅ 💰\\n\\nStudent asked: \" + $('Format Results').first().json.originalQuery + \"\\n\\nRelevant notices:\\n\" + $('Format Results').first().json.noticesSummary + \"\\n\\nGenerate a helpful response.\") }}}]}\n  ]\n}",
+                "options": {}
+            },
+            "id": "gemini-answer",
+            "name": "Gemini Generate Answer",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1980,
+                150
+            ],
+            "credentials": {
+                "httpQueryAuth": {
+                    "id": "GEMINI_API_KEY",
+                    "name": "Gemini API Key"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+                "text": "এই বিষয়ে এখনো কোনো নোটিশ আসেনি। 📭\n\nনতুন নোটিশ আসলে জানিয়ে দেব! 🔔",
+                "additionalFields": {}
+            },
+            "id": "send-no-results",
+            "name": "Send No Results",
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1.2,
+            "position": [
+                1980,
+                300
+            ],
+            "credentials": {
+                "telegramApi": {
+                    "id": "Iy9Ev7CAjPjLQ0gB",
+                    "name": "Telegram account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "const geminiResponse = $input.first().json;\n\nlet answer;\ntry {\n  answer = geminiResponse.candidates[0].content.parts[0].text;\n} catch (e) {\n  answer = 'দুঃখিত, এই মুহূর্তে উত্তর দিতে পারছি না। 😔';\n}\n\nconst triggerData = $('Telegram Trigger').first().json;\nconst queryData = $('Parse Query').first().json;\n\nreturn {\n  answer: answer,\n  user_telegram_id: triggerData.message?.from?.id || 0,\n  user_query: queryData.original_query || '',\n  detected_intent: queryData.intent || 'general',\n  was_successful: true\n};"
+            },
+            "id": "extract-answer",
+            "name": "Extract Answer",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                2200,
+                150
+            ]
+        },
+        {
+            "parameters": {
+                "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+                "text": "={{ $json.answer }}",
+                "additionalFields": {}
+            },
+            "id": "send-answer",
+            "name": "Send Answer",
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1.2,
+            "position": [
+                2420,
+                150
+            ],
+            "credentials": {
+                "telegramApi": {
+                    "id": "Iy9Ev7CAjPjLQ0gB",
+                    "name": "Telegram account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "operation": "insert",
+                "tableId": "query_logs",
+                "dataToSend": "defineBelow",
+                "fieldsToSend": {
+                    "values": [
+                        {
+                            "fieldId": "user_telegram_id",
+                            "fieldValue": "={{ $json.user_telegram_id }}"
+                        },
+                        {
+                            "fieldId": "user_query",
+                            "fieldValue": "={{ $json.user_query }}"
+                        },
+                        {
+                            "fieldId": "detected_intent",
+                            "fieldValue": "={{ $json.detected_intent }}"
+                        },
+                        {
+                            "fieldId": "response_text",
+                            "fieldValue": "={{ $json.answer }}"
+                        },
+                        {
+                            "fieldId": "was_successful",
+                            "fieldValue": "={{ $json.was_successful }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "log-query",
+            "name": "Log Query",
+            "type": "n8n-nodes-base.supabase",
+            "typeVersion": 1,
+            "position": [
+                2420,
+                300
+            ],
+            "credentials": {
+                "supabaseApi": {
+                    "id": "YfFo5wgFVS893IgI",
+                    "name": "Supabase account"
+                }
+            }
+        }
+    ],
+    "connections": {
+        "Telegram Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Has Media?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Has Media?": {
+            "main": [
+                [
+                    {
+                        "node": "Get Media File",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Is Private Chat?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Media File": {
+            "main": [
+                [
+                    {
+                        "node": "Tesseract OCR",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Tesseract OCR": {
+            "main": [
+                [
+                    {
+                        "node": "Prepare OCR Content",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Prepare OCR Content": {
+            "main": [
+                [
+                    {
+                        "node": "Wait 2s",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Wait 2s": {
+            "main": [
+                [
+                    {
+                        "node": "Gemini Extract Notice",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Gemini Extract Notice": {
+            "main": [
+                [
+                    {
+                        "node": "Failsafe Notice",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Failsafe Notice": {
+            "main": [
+                [
+                    {
+                        "node": "Insert to Supabase",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Insert to Supabase": {
+            "main": [
+                [
+                    {
+                        "node": "Send Notice Confirmation",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Is Private Chat?": {
+            "main": [
+                [
+                    {
+                        "node": "Gemini Understand Query",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Gemini Understand Query": {
+            "main": [
+                [
+                    {
+                        "node": "Parse Query",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Parse Query": {
+            "main": [
+                [
+                    {
+                        "node": "Is Greeting?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Is Greeting?": {
+            "main": [
+                [
+                    {
+                        "node": "Send Greeting",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Search Notices",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Search Notices": {
+            "main": [
+                [
+                    {
+                        "node": "Format Results",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format Results": {
+            "main": [
+                [
+                    {
+                        "node": "Has Results?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Has Results?": {
+            "main": [
+                [
+                    {
+                        "node": "Gemini Generate Answer",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Send No Results",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Gemini Generate Answer": {
+            "main": [
+                [
+                    {
+                        "node": "Extract Answer",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Extract Answer": {
+            "main": [
+                [
+                    {
+                        "node": "Send Answer",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "Log Query",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "staticData": null,
+    "tags": [],
+    "triggerCount": 1,
+    "pinData": {}
+}
